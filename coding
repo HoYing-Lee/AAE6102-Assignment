@@ -1,0 +1,122 @@
+%Import Data
+rcvr=importdata('C:\Users\21109876r\Downloads\rcvr.dat');
+eph=importdata('C:\Users\21109876r\Downloads\eph.dat');
+
+%Sort both matrix
+rcvr = sortrows(rcvr,2);
+eph = sortrows(eph,2);
+
+% initial position
+x0 = [-2694685.473;-4293642.366;3857878.924;0.0]; 
+
+%Variables of each column in rcvr.dat
+rcvr_tow_rcvr = rcvr(:,1); % receiver time of week (s)
+svid_rcvr = rcvr(:,2); % satellite PRN number (1-32)
+pr_rcvr = rcvr(:,3); % pseudorange (m)
+cycles_rcvr = rcvr(:,4); % number of accumulated cycles
+phase_rcvr = rcvr(:,5); % to convert to (0-359.99) mult. by 360/2048
+slp_dtct_rcvr = rcvr(:,6); % 0 = no cycle slip detected; non 0 = cycle slip
+snr_dbhz_rcvr = rcvr(:,7); % signal to noise ratio (db-Hz)
+
+%Variables of each column in eph.dat
+rcvr_tow = rcvr(:,1); % receiver time of week (s)
+svid_e = eph(:,2); % saatellite PRN number (1-32)
+toc_e = eph(:,3); % reference time of clock paramters (s)
+toe_e = eph(:,4); % reference time of ephemeris parameters (s)
+af0_e = eph(:,5); % clock correction coefficient-group delay (s)
+af1_e = eph(:,6); % clock correction coefficient (s/s)
+af2_e = eph(:,7); % clock correction coefficient (s/s/s)
+ura_e = eph(:,8); % user range accuracy (m)
+e_e = eph(:,9); % eccentricity (-)
+sqrta_e = eph(:,10); % square root of semi-major axis a (m**1/2)
+dn_e = eph(:,11); % mean motion correction (r/s)
+m0_e = eph(:,12); % mean anomaly at reference time (r)
+w_e = eph(:,13); % argument of perigee (r)
+omg0_e = eph(:,14); % right ascension (r)
+i0_e = eph(:,15); % inclination angle at reference time (r)
+odot_e = eph(:,16); % rate of right ascension (r/s)
+idot_e = eph(:,17); % rate of inclination angle (r/s)
+cus_e = eph(:,18); % argument oflatitude correction, sine (r)
+cuc_e = eph(:,19); % argument of latitude correction, cosine (r)
+cis_e = eph(:,20); % inclination correction, sine (r)
+cic_e = eph(:,21); % inclination correction, cosine (r)
+crs_e = eph(:,22); % radius correction, sine (m)
+crc_e = eph(:,23); % radius correction, cosine (m)
+iod_e = eph(:,24); % issue of data number
+
+%GPS Constants
+wedot = 7.2921151467e-5; % WGS 84 value of earth's universal gravitation constant (m^3/s^2)
+mu = 3.986005e14; % WGS 84 value of earth's rotatino rate (r/s)
+c = 299792458.0; % speed of light (m/s)
+F = -4.442807633e-10; %Relativistic correction term constant
+t_tms = rcvr_tow_rcvr-pr_rcvr./c; % transmission time of satellite
+
+%Computation of a Satellite's ECEF Position Vector
+a= sqrta_e.^2; % semimajor axis
+n = sqrt(mu./a.^3)+dn_e; %mean motion
+t_k = t_tms-toe_e; %Time from ephemeris epoch
+M_k = m0_e + n.*t_k; % mean anomaly
+E_k0 = M_k; % initial eccentric anomaly
+
+%Iteriation to obtain eccentric anomaly
+for i = 1:size(eph,1)
+    eps = 1;
+    n=1;
+    while eps>=1e-4
+        E_k(i,1) = e_e(i)*sin(E_k0(i,1))+M_k(i,1);
+        eps=abs(E_k(i,1)-E_k0(i,1));
+        E_k0(i,1) = E_k(i,1);
+        n = n+1;
+    end
+end
+
+v = 2*atan(sqrt((1+e_e)./(1-e_e)).*tan(E_k/2)); % true anomaly
+phi_k = v+w_e; % Argument of latitude
+del_phi_k = cus_e.*sin(2*phi_k)+cuc_e.*cos(2*phi_k); % Argument of latitude correction
+del_r_k = crs_e.*sin(2*phi_k)+crc_e.*cos(2*phi_k); % Radius correction
+del_i_k = cis_e.*sin(2*phi_k)+cic_e.*cos(2*phi_k); % Inclination correction
+u_k = phi_k + del_phi_k; % Corrected argument of latitude
+r_k = a.*(1-e_e.*cos(E_k))+del_r_k; % Corrected radius
+i_k = i0_e + idot_e.*t_k+del_i_k; % Corrected inclination
+omega_k = omg0_e + (odot_e-wedot).*t_k-wedot*toe_e; % Corrected longitude of node
+x_p = r_k.*cos(u_k); % In-plane x position
+y_p = r_k.*sin(u_k); % In-plane y position
+x_s = x_p.*cos(omega_k) - y_p.*cos(i_k).*sin(omega_k); % ECEF x-coordinate
+y_s = x_p.*sin(omega_k) + y_p.*cos(i_k).*cos(omega_k); % ECEF y-coordinate
+z_s = y_p.*sin(i_k); % ECEF z-coordinate
+
+
+% Relativistic Effect
+delta_tr = F.*sqrt(a).*sin(E_k); 
+% Satellite Clock Error
+delta_tdk = af0_e + af1_e.*(t_tms-toc_e) + af2_e.*(t_tms-toc_e).^2 ;
+
+
+% Linearization
+rho = pr_rcvr; % pseudorange
+rho_2 = sqrt((x_s-x0(1)).^2 + (y_s-x0(2)).^2 + (z_s-x0(3)).^(2)) + c *x0(4) - delta_tdk*c;
+delta_rho = rho_2 - rho;
+a_x = (x_s-x0(1))./sqrt((x_s-x0(1)).^2 + (y_s-x0(2)).^2 + (z_s-x0(3)).^(2));
+a_y = (y_s-x0(2))./sqrt((x_s-x0(1)).^2 + (y_s-x0(2)).^2 + (z_s-x0(3)).^(2));
+a_z = (z_s-x0(3))./sqrt((x_s-x0(1)).^2 + (y_s-x0(2)).^2 + (z_s-x0(3)).^(2));
+H = [a_x a_y a_z ones(size(rcvr,1),1)];
+delta_x = inv(H'*H)*H'*delta_rho;
+delta_x(4) = delta_x(4)/c;
+
+i = 0;
+while norm(delta_x(1:3)) >= 1e-4
+    x0 = x0 + delta_x;
+    rho_2 = sqrt((x_s-x0(1)).^2 + (y_s-x0(2)).^2 + (z_s-x0(3)).^(2)) + c* x0(4) - delta_tdk*c;
+    delta_rho = rho_2 - rho;
+    a_x = (x_s-x0(1))./sqrt((x_s-x0(1)).^2 + (y_s-x0(2)).^2 + (z_s-x0(3)).^(2));
+    a_y = (y_s-x0(2))./sqrt((x_s-x0(1)).^2 + (y_s-x0(2)).^2 + (z_s-x0(3)).^(2));
+    a_z = (z_s-x0(3))./sqrt((x_s-x0(1)).^2 + (y_s-x0(2)).^2 + (z_s-x0(3)).^(2));
+    H = [a_x a_y a_z ones(size(rcvr,1),1)];
+    delta_x = inv(H'*H)*H'*delta_rho;
+    delta_x(4) = delta_x(4)/c;
+    i = i+1;
+end
+
+delta_x = lscov(H,delta_rho);
+x_final = x0 + delta_x;
+
