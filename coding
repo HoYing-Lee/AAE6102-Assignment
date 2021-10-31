@@ -118,5 +118,5 @@ while norm(delta_x(1:3)) >= 1e-4
 end
 
 delta_x = lscov(H,delta_rho);
-x_final = x0 + delta_x;
+x_final = x0;
 
